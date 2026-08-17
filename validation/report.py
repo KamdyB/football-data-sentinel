@@ -1,18 +1,23 @@
-def build_run_report(
-    status: str,
-    raw_count: int,
-    valid_count: int,
-    validation_results: dict,
-    drift_results: dict,
-) -> dict:
-    """Build the structured result of one Sentinel run."""
+from validation.status import Status
 
+
+def build_run_report(raw_count: int, valid_count: int, validation_errors: list,
+                      drift_result: dict, repair_result: dict, status: Status) -> dict:
+    """Combine everything from one pipeline run into a single structured report."""
     return {
-        "status": status,
+        "status": status.value,
         "records": {
             "raw": raw_count,
             "valid": valid_count,
-        },
-        "validation": validation_results,
-        "drift": drift_results,
-    }
+            },
+        "validation": {
+            "passed": len(validation_errors) == 0,
+            "errors": validation_errors,
+            },
+        "drift": {
+            "detected": drift_result["detected"],
+            "missing": drift_result["missing"],
+            "unexpected": drift_result["unexpected"],
+            },
+        "repair": repair_result if repair_result is not None else {"attempted": False},
+        }

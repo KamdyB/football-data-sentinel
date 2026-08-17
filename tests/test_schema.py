@@ -55,29 +55,22 @@ mapping = suggest_mapping(
 print("MAPPING")
 print(mapping)
 
-status = classify_status(
-    validation_errors=[],
-    drift_result=drift,
-)
-
 repair = attempt_repair(
     broken_player,
     mapping,
-)
+    )
 
 print("REPAIR")
 print(repair)
 
+status = classify_status(
+    validation_errors=[],
+    drift_result=drift,
+    repair_result=repair,
+    )
 
 print("STATUS")
 print(status)
-
-mapping = {
-    "unexpected_field": "appearances",
-    "missing_field": "games",
-    "confidence": 0.95,
-}
-
 
 players = [p for p in players if is_player_row(p)]
 print(f"{len(players)} valid player rows after filtering.")
@@ -106,3 +99,23 @@ if dataset_errors:
     print(f"Dataset-level issues: {dataset_errors}")
 else:
     print("Dataset-level checks passed.")
+
+
+import json
+from datetime import datetime, timezone
+
+report = build_run_report(
+    raw_count=len(data[0]["players"]),
+    valid_count=len(players),
+    validation_errors=errors,
+    drift_result=drift,
+    repair_result=repair,
+    status=status,
+    )
+
+timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+with open(f"data/runs/{timestamp}.json", "w", encoding="utf-8") as f:
+    json.dump(report, f, indent=2)
+
+print("RUN REPORT")
+print(json.dumps(report, indent=2))

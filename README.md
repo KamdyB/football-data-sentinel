@@ -28,5 +28,25 @@ against deliberately malformed test data to confirm it actually
 detects the problem it's meant to catch, not just against clean
 input.
 
-Not yet built: schema drift detection, automated recovery,
-quarantine handling, structured logging. See project roadmap.
+## Recovery and Status
+
+When drift is detected, Sentinel does not repair automatically.
+It proposes a field mapping using string similarity, then only
+applies the repair if confidence clears a threshold (0.85) and
+the repaired record passes the full validation pipeline.
+
+Status meanings:
+- PASS: clean record, no issues
+- RECOVER: a repair was attempted, succeeded, and was revalidated
+- QUARANTINE: drift was detected but no safe repair was possible,
+  either because confidence was too low or the repair itself
+  still failed validation
+- FAIL: validation errors with no drift involved
+
+Known bug found and fixed during development: an earlier version
+computed status before the repair had run, so status always
+defaulted to QUARANTINE regardless of the repair's real outcome.
+Fixed by reordering the pipeline so repair completes before
+classification runs. This is logged here deliberately, since
+catching contradictory system state was part of proving the
+Sentinel's decisions are trustworthy, not just present.

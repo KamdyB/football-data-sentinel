@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "records": {
+    "raw": 573,
+    "valid": 551
+  },
+  "validation": {
+    "passed": true,
+    "errors": []
+  },
+  "drift": {
+    "detected": false,
+    "missing": [],
+    "unexpected": []
+  },
+  "repair": {
+    "attempted": false
+  }
+}

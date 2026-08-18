@@ -84,11 +84,12 @@ for i, player in enumerate(players):
     errors += check_numeric_fields(player)
     errors += check_ranges(player)
     errors += check_relationships(player)
-    dataset_errors = check_dataset(players)
 
     if errors:
         total_errors += len(errors)
         print(f"Record {i}: {errors}")
+
+dataset_errors = check_dataset(players)
 
 if total_errors == 0:
     print("Schema validation passed.")

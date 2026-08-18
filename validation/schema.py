@@ -19,6 +19,8 @@ RANGE_CHECKS = {
     }
 
 EXPECTED_RECORD_RANGE = (500, 620)
+SCHEMA_NAME = "championship_player_stats"
+SCHEMA_VERSION = "1.0"
 
 def validate_record(record: dict) -> list[str]:
     """Return problems found in one player record."""
@@ -29,9 +31,6 @@ def validate_record(record: dict) -> list[str]:
             errors.append(f"missing field: {field}")
 
     return errors
-
-NUMERIC_FIELDS = ["age", "games", "starts", "minutes", "goals", "assists"]
-TEXT_FIELDS = ["player_name", "nation", "position", "squad"]
 
 
 def check_text_fields(record: dict) -> list[str]:

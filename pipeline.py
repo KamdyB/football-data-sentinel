@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from datetime import datetime, timezone
 
 from validation.schema import (
     REQUIRED_FIELDS,
@@ -11,235 +10,124 @@ from validation.schema import (
     check_relationships,
     check_dataset,
     is_player_row,
-)
-
+    )
 from validation.drift import detect_drift, suggest_mapping
 from validation.recovery import attempt_repair
-from validation.status import classify_status
+from validation.status import classify_status, Status
 from validation.report import build_run_report
 
 
 def validate_player(player: dict) -> list[str]:
     """Run all record-level validation checks."""
-    errors = []
+    return (
+        validate_record(player)
+        + check_text_fields(player)
+        + check_numeric_fields(player)
+        + check_ranges(player)
+        + check_relationships(player)
+        )
 
-    errors += validate_record(player)
-    errors += check_text_fields(player)
-    errors += check_numeric_fields(player)
-    errors += check_ranges(player)
-    errors += check_relationships(player)
 
-    return errors
+def process_player(player: dict) -> dict:
+    """Run one record through validation, drift detection, and repair.
+    Returns the final status alongside the evidence that produced it."""
+    errors = validate_player(player)
+    drift = detect_drift(player, REQUIRED_FIELDS)
+
+    repair = None
+    if drift["detected"]:
+        # recovery.py handles one field rename at a time. More than one
+        # missing or unexpected field means we can't know which unexpected
+        # field maps to which missing one, so we refuse rather than guess.
+        if len(drift["missing"]) == 1 and len(drift["unexpected"]) == 1:
+            mapping = suggest_mapping(drift["unexpected"][0], drift["missing"][0])
+            repair = attempt_repair(player, mapping)
+        else:
+            repair = {"success": False, "reason": "ambiguous field drift"}
+
+    status = classify_status(errors, drift, repair)
+    final_record = repair["record"] if (repair and repair.get("success")) else player
+
+    return {
+        "status": status,
+        "record": final_record,
+        "errors": errors,
+        "drift": drift,
+        "repair": repair,
+        }
 
 
 def run_pipeline(input_path: str) -> dict:
-    # ---------------------------------------------------------
-    # 1. LOAD RAW DATA
-    # ---------------------------------------------------------
     with open(input_path, "r", encoding="utf-8") as file:
         data = json.load(file)
 
     raw_players = data[0]["players"]
+    players = [p for p in raw_players if is_player_row(p)]
 
-    # ---------------------------------------------------------
-    # 2. REMOVE STRUCTURAL / NON-PLAYER ROWS
-    # ---------------------------------------------------------
-    players = [
-        player
-        for player in raw_players
-        if is_player_row(player)
-    ]
+    results = [process_player(p) for p in players]
 
-    # ---------------------------------------------------------
-    # 3. VALIDATE EVERY PLAYER
-    # ---------------------------------------------------------
-    record_results = []
-    validation_errors = []
+    trusted = [r["record"] for r in results if r["status"] in (Status.PASS, Status.RECOVER)]
+    quarantined = [
+        {
+            "record": r["record"],
+            "status": r["status"].value,
+            "errors": r["errors"],
+            "drift": r["drift"],
+            "repair": r["repair"],
+            }
+        for r in results if r["status"] not in (Status.PASS, Status.RECOVER)
+        ]
+    recovered_count = sum(1 for r in results if r["status"] == Status.RECOVER)
+    all_errors = [error for r in results for error in r["errors"]]
 
-    for i, player in enumerate(players):
-        errors = validate_player(player)
-
-        record_results.append({
-            "index": i,
-            "record": player,
-            "errors": errors,
-        })
-
-        validation_errors.extend(
-            f"record {i}: {error}"
-            for error in errors
-        )
-
-    # ---------------------------------------------------------
-    # 4. DATASET-LEVEL VALIDATION
-    # ---------------------------------------------------------
     dataset_errors = check_dataset(players)
 
-    validation_errors.extend(
-        f"dataset: {error}"
-        for error in dataset_errors
-    )
-
-    # ---------------------------------------------------------
-    # 5. DETECT DRIFT + ATTEMPT SAFE RECOVERY
-    # ---------------------------------------------------------
-    repair_results = []
-
-    for result in record_results:
-        player = result["record"]
-        index = result["index"]
-
-        drift_result = detect_drift(
-            player,
-            REQUIRED_FIELDS,
-        )
-
-        if not drift_result["detected"]:
-            continue
-
-        # Current recovery.py supports one field rename at a time.
-        # Refuse ambiguous multi-field mappings rather than guessing.
-        if (
-            len(drift_result["missing"]) != 1
-            or len(drift_result["unexpected"]) != 1
-        ):
-            repair_results.append({
-                "record": index,
-                "attempted": False,
-                "success": False,
-                "reason": "ambiguous field drift",
-                "drift": drift_result,
-            })
-            continue
-
-        missing_field = drift_result["missing"][0]
-        unexpected_field = drift_result["unexpected"][0]
-
-        mapping = suggest_mapping(
-            unexpected_field,
-            missing_field,
-        )
-
-        repair = attempt_repair(
-            player,
-            mapping,
-        )
-
-        repair_results.append({
-            "record": index,
-            "attempted": True,
-            "mapping": mapping,
-            **repair,
-        })
-
-    # ---------------------------------------------------------
-    # 6. DETERMINE RUN-LEVEL DRIFT
-    # ---------------------------------------------------------
-    drifted_records = []
-
-    for result in record_results:
-        drift_result = detect_drift(
-            result["record"],
-            REQUIRED_FIELDS,
-        )
-
-        if drift_result["detected"]:
-            drifted_records.append(drift_result)
-
-    if drifted_records:
-        drift_result = {
-            "detected": True,
-            "missing": sorted({
-                field
-                for drift in drifted_records
-                for field in drift["missing"]
-            }),
-            "unexpected": sorted({
-                field
-                for drift in drifted_records
-                for field in drift["unexpected"]
-            }),
-        }
+    # Per-record status already decides trusted vs quarantined. This is a
+    # coarser run-level summary: a dataset problem outranks everything,
+    # then any quarantine at all means the run isn't fully clean.
+    if dataset_errors:
+        overall_status = Status.FAIL
+    elif quarantined:
+        overall_status = Status.QUARANTINE
     else:
-        drift_result = {
-            "detected": False,
-            "missing": [],
-            "unexpected": [],
+        overall_status = Status.PASS
+
+    drifted = [r["drift"] for r in results if r["drift"]["detected"]]
+    run_drift = {
+        "detected": bool(drifted),
+        "missing": sorted({field for d in drifted for field in d["missing"]}),
+        "unexpected": sorted({field for d in drifted for field in d["unexpected"]}),
         }
-
-    # ---------------------------------------------------------
-    # 7. DETERMINE RECOVERY RESULT
-    # ---------------------------------------------------------
-    if repair_results:
-        all_recovered = all(
-            result["success"]
-            for result in repair_results
-        )
-
-        repair_result = {
-            "attempted": True,
-            "success": all_recovered,
-            "records": repair_results,
-        }
-    else:
-        repair_result = None
-
-    # ---------------------------------------------------------
-    # 8. FINAL STATUS
-    # ---------------------------------------------------------
-    status = classify_status(
-        validation_errors,
-        drift_result,
-        repair_result,
-    )
-
-    # ---------------------------------------------------------
-    # 9. BUILD RUN REPORT
-    # ---------------------------------------------------------
-    valid_count = sum(
-        1
-        for result in record_results
-        if not result["errors"]
-    )
 
     report = build_run_report(
         raw_count=len(raw_players),
-        valid_count=valid_count,
-        validation_errors=validation_errors,
-        drift_result=drift_result,
-        repair_result=repair_result,
-        status=status,
-    )
-
-    # ---------------------------------------------------------
-    # 10. PERSIST RUN REPORT
-    # ---------------------------------------------------------
-    runs_dir = Path("data/runs")
-    runs_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now(timezone.utc).strftime(
-        "%Y%m%dT%H%M%SZ"
-    )
-
-    report_path = runs_dir / f"{timestamp}.json"
-
-    with open(
-        report_path,
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            report,
-            file,
-            indent=2,
+        player_row_count=len(players),
+        final_trusted_count=len(trusted),
+        recovered_count=recovered_count,
+        quarantined_count=len(quarantined),
+        validation_errors=all_errors + [f"dataset: {e}" for e in dataset_errors],
+        drift_result=run_drift,
+        repair_result=None,
+        status=overall_status,
         )
+
+    Path("data/processed").mkdir(parents=True, exist_ok=True)
+    Path("data/quarantine").mkdir(parents=True, exist_ok=True)
+    Path("data/runs").mkdir(parents=True, exist_ok=True)
+
+    with open("data/processed/players.json", "w", encoding="utf-8") as file:
+        json.dump(trusted, file, indent=2)
+
+    with open("data/quarantine/players.json", "w", encoding="utf-8") as file:
+        json.dump(quarantined, file, indent=2)
+
+    timestamp = report["collected_at"].replace(":", "").replace("-", "").split(".")[0] + "Z"
+    with open(f"data/runs/{timestamp}.json", "w", encoding="utf-8") as file:
+        json.dump(report, file, indent=2)
 
     return report
 
 
 if __name__ == "__main__":
-    report = run_pipeline(
-        "data/sample/players_raw.json"
-    )
-
+    report = run_pipeline("data/sample/players_raw.json")
     print(json.dumps(report, indent=2))

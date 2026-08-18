@@ -1,3 +1,5 @@
+from collections import Counter
+
 REQUIRED_FIELDS = [
     "player_name", "nation",
     "position", "age",
@@ -84,9 +86,14 @@ def check_ranges(record: dict) -> list[str]:
     return errors
 
 def is_player_row(record: dict) -> bool:
-    """Return False for structural rows (e.g. repeated table headers)."""
     name = record.get("player_name")
-    return bool(name) and name != "Player"
+
+    if not isinstance(name, str):
+        return False
+
+    name = name.strip()
+
+    return bool(name) and name.lower() != "player"
 
 def check_relationships(record: dict) -> list[str]:
     """Return errors for numeric fields that contradict each other."""
@@ -132,3 +139,25 @@ def check_dataset(records: list[dict]) -> list[str]:
         errors += check_field_not_all_empty(records, field)
 
     return errors
+
+def check_duplicates(records: list[dict]) -> list[dict]:
+    """Return repeated player/squad combinations as an informational signal."""
+    keys = [
+        (
+            r.get("player_name", "").strip().lower(),
+            r.get("squad", "").strip().lower(),
+        )
+        for r in records
+    ]
+
+    counts = Counter(keys)
+
+    return [
+        {
+            "player_name": player_name,
+            "squad": squad,
+            "count": count,
+        }
+        for (player_name, squad), count in counts.items()
+        if count > 1
+    ]

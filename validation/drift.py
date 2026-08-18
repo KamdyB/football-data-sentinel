@@ -3,6 +3,9 @@ from difflib import SequenceMatcher
 
 FIELD_ALIASES = {
     "appearances": "games",
+    "matches_played": "games",
+    "minutes_played": "minutes",
+    "goals_scored": "goals",
 }
 
 

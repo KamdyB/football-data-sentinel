@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sentinel Telemetry Console</title>
+    <style>
+        body { font-family: monospace; background: #0a0e14; color: #b3b1ad; padding: 30px; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
+        .metric-block { background: #14191f; padding: 20px; border-top: 3px solid #3e4b59; }
+        .PASS { border-top-color: #29a35a; }
+        .WARNING { border-top-color: #d9953b; }
+        .QUARANTINE, .FAIL { border-top-color: #ff3333; }
+        pre { background: #0d1017; padding: 20px; color: #ffb454; overflow-x: auto; font-size: 12px; border: 1px solid #1a2333; }
+        button { background: #ffb454; color: #0a0e14; border: none; padding: 12px 24px; font-weight: bold; cursor: pointer; font-family: monospace; }
+        button:hover { background: #e69d3b; }
+    </style>
+</head>
+<body>
+    <h2>[SENTINEL SYSTEM MONITOR]</h2>
+    <div class="grid">
+        <div id="m-state" class="metric-block"><div>Pipeline Status</div><h1 id="v-state">IDLE</h1></div>
+        <div class="metric-block"><div>Trusted Datasets</div><h1 id="v-trust">0</h1></div>
+        <div class="metric-block"><div>Isolated Rows</div><h1 id="v-quar">0</h1></div>
+        <div class="metric-block"><div>Active Anomalies</div><h1 id="v-errs">0</h1></div>
+    </div>
+    <button onclick="streamSimulation()">Transmit Scraper Batch</button>
+    <h3>Operational Telemetry Trace</h3>
+    <pre id="console-stream">Awaiting data stream packet transmission...</pre>
+
+    <script>
+        async function streamSimulation() {
+            const streamPacket = {
+                "players": [
+                    {"player_name": "Brenden Aaronson", "nation": "USA", "position": "MF", "age": "25", "squad": "Leeds", "games": "32", "starts": "28", "minutes": "2400", "goals": "4", "assists": "5"},
+                    {"player_name": "Brenden Aaronson", "nation": "USA", "position": "MF", "age": "25", "squad": "Leeds", "games": "32", "starts": "28", "minutes": "2400", "goals": "4", "assists": "5"},
+                    {"player_name": "Oliver Lawson", "nation": "ENG", "position": "FW", "age": "24", "squad": "Luton Town", "games": "10", "starts": "25", "minutes": "900", "goals": "2", "assists": "1"}
+                ]
+            };
+            try {
+                const res = await fetch('http://localhost:8080/api/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(streamPacket)
+                });
+                const report = await res.json();
+                document.getElementById("v-state").innerText = report.status;
+                document.getElementById("m-state").className = `metric-block ${report.status}`;
+                document.getElementById("v-trust").innerText = report.meta.trusted;
+                document.getElementById("v-quar").innerText = report.meta.quarantined;
+                document.getElementById("v-errs").innerText = report.errors.length;
+                document.getElementById("console-stream").innerText = JSON.stringify(report, null, 4);
+            } catch (e) {
+                document.getElementById("console-stream").innerText = "Network transmission trace fault: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>

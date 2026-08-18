@@ -32,7 +32,6 @@ def validate_player(player: dict) -> list[str]:
 
 def process_player(player: dict) -> dict:
     """Run one record through validation, drift detection, and repair."""
-
     errors = validate_player(player)
 
     drift = detect_drift(player, REQUIRED_FIELDS)
@@ -42,15 +41,13 @@ def process_player(player: dict) -> dict:
     if drift["missing"]:
         if (
             len(drift["missing"]) == 1
-            and len(drift["unexpected"]) == 1
+            and len(drift.get("unexpected", [])) == 1
         ):
             mapping = suggest_mapping(
                 drift["unexpected"][0],
                 drift["missing"][0],
             )
-
             repair = attempt_repair(player, mapping)
-
         else:
             repair = {
                 "success": False,
@@ -84,11 +81,23 @@ def process_player(player: dict) -> dict:
     }
 
 
-def run_pipeline(input_path: str) -> dict:
-    with open(input_path, "r", encoding="utf-8") as file:
-        data = json.load(file)
+def run_pipeline(input_source) -> dict:
+    """Accepts either a string file path or a direct raw dictionary stream."""
+    if isinstance(input_source, str):
+        with open(input_source, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    elif isinstance(input_source, dict):
+        data = input_source
+    else:
+        data = []
 
-    raw_players = data[0]["players"]
+    if isinstance(data, list) and len(data) > 0:
+        raw_players = data[0].get("players", [])
+    elif isinstance(data, dict):
+        raw_players = data.get("players", [])
+    else:
+        raw_players = []
+
     players = [p for p in raw_players if is_player_row(p)]
     duplicates = check_duplicates(players)
 
@@ -116,17 +125,17 @@ def run_pipeline(input_path: str) -> dict:
     record_statuses = [r["status"] for r in results]
 
     if dataset_errors:
-       overall_status = Status.FAIL
+        overall_status = Status.FAIL
     elif Status.QUARANTINE in record_statuses:
-       overall_status = Status.QUARANTINE
+        overall_status = Status.QUARANTINE
     elif Status.FAIL in record_statuses:
-       overall_status = Status.FAIL
+        overall_status = Status.FAIL
     elif Status.RECOVER in record_statuses:
-       overall_status = Status.RECOVER
+        overall_status = Status.RECOVER
     elif Status.WARNING in record_statuses:
-       overall_status = Status.WARNING
+        overall_status = Status.WARNING
     else:
-       overall_status = Status.PASS
+        overall_status = Status.PASS
 
     drifted = [r["drift"] for r in results if r["drift"]["detected"]]
     run_drift = {
@@ -211,4 +220,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print_summary(report)
-    

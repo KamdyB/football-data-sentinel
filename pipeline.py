@@ -82,21 +82,26 @@ def process_player(player: dict) -> dict:
 
 
 def run_pipeline(input_source) -> dict:
-    """Accepts either a string file path or a direct raw dictionary stream."""
+    """Accept a raw JSON file path or a direct scraper payload."""
     if isinstance(input_source, str):
         with open(input_source, "r", encoding="utf-8") as file:
             data = json.load(file)
     elif isinstance(input_source, dict):
         data = input_source
     else:
-        data = []
+        raise ValueError("pipeline input must be a file path or JSON object")
 
-    if isinstance(data, list) and len(data) > 0:
-        raw_players = data[0].get("players", [])
+    if isinstance(data, list):
+       if not data or not isinstance(data[0], dict):
+           raise ValueError("JSON list must contain a player payload object")
+       raw_players = data[0].get("players", [])
     elif isinstance(data, dict):
-        raw_players = data.get("players", [])
+       raw_players = data.get("players", [])
     else:
-        raw_players = []
+       raise ValueError("unsupported JSON payload")
+      
+    if not isinstance(raw_players, list):
+       raise ValueError("'players' must be a list")
 
     players = [p for p in raw_players if is_player_row(p)]
     duplicates = check_duplicates(players)
@@ -152,10 +157,10 @@ def run_pipeline(input_source) -> dict:
         quarantined_count=len(quarantined),
         validation_errors=all_errors + [f"dataset: {e}" for e in dataset_errors],
         drift_result=run_drift,
-        repair_result=None,
+         repair_result=None,
+        duplicates=duplicates,
         status=overall_status,
         )
-    report["duplicates"] = duplicates
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     Path("data/quarantine").mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@ from validation.schema import SCHEMA_NAME, SCHEMA_VERSION
 
 def build_run_report(raw_count, player_row_count, final_trusted_count,
                      recovered_count, quarantined_count, validation_errors,
-                     drift_result, repair_result, duplicates, status) -> dict:
+                     drift_result, repair_result, status, duplicates) -> dict:
     """Combine everything from one pipeline run into a single structured report."""
 
     return {

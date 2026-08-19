@@ -83,13 +83,14 @@ def process_player(player: dict) -> dict:
 
 def run_pipeline(input_source) -> dict:
     """Accept a raw JSON file path or a direct scraper payload."""
+    
     if isinstance(input_source, str):
         with open(input_source, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    elif isinstance(input_source, dict):
+             data = json.load(file)
+    elif isinstance(input_source, (dict, list)):
         data = input_source
     else:
-        raise ValueError("pipeline input must be a file path or JSON object")
+        raise ValueError("pipeline input must be a file path, JSON object, or JSON list")
 
     if isinstance(data, list):
        if not data or not isinstance(data[0], dict):
@@ -158,8 +159,8 @@ def run_pipeline(input_source) -> dict:
         validation_errors=all_errors + [f"dataset: {e}" for e in dataset_errors],
         drift_result=run_drift,
          repair_result=None,
-        duplicates=duplicates,
         status=overall_status,
+        duplicates=duplicates,
         )
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)

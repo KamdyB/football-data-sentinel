@@ -1,439 +1,150 @@
-# Sentinel — Engineering Error Log
+# Error Log
 
-> This document records significant failures encountered while building
-> Football Data Sentinel. Errors are preserved intentionally as part of the
-> project's engineering history and debugging evidence.
+Real errors encountered while building the Sentinel validation
+pipeline, in the order they happened. Kept on purpose, since
+catching and fixing these is part of the evidence that the
+system's decisions can be trusted.
 
----
+Each entry: what was run, what went wrong, what was expected,
+what fixed it, what it taught.
 
-## Error Log
+## 1. ModuleNotFoundError: No module named 'validation'
 
-### ERR-001 — FBref CSV contained unexpected divider/header rows
+Command run: python tests/test_schema.py
 
-**Stage:** Raw data ingestion  
-**Status:** Resolved
+Running the file directly only adds its own folder to Python's
+search path, not the repo root, so the import couldn't find
+validation/. Fixed by running as a module from the repo root
+instead: python -m tests.test_schema
 
-**Symptom**
+Dotted imports need the project root on the path. Running a file
+directly and running it as a module are not the same thing.
 
-The downloaded FBref dataset contained rows that did not represent actual
-player records, including blank/divider/header-style rows.
+## 2. Type checks failed on every field
 
-**Expected**
+EXPECTED_TYPES checked for real Python int/float, but scraped
+values arrive as strings ("24", not 24), so every record failed
+every check. Fixed by replacing direct type checks with
+conversion checks: numeric fields are validated by attempting
+float(value) inside a try/except, not by checking raw Python
+type.
 
-Every row in the raw dataset should represent one player record.
+Scraped data should be validated for what it actually is, not for
+what the underlying concept usually looks like.
 
-**Actual**
+## 3. Blank divider rows in scraped data
 
-The dataset contained structural rows mixed into the player data.
+Every 26th record failed all six numeric checks at once, all
+fields returning None. Printed one directly and found it was a
+fully blank row, not a real player. FBref's combined stats table
+includes blank divider rows between squads. Fixed by adding
+is_player_row() to filter these before validation runs. 573 raw
+rows became 551 real player records.
 
-**Root cause**
+A webpage's visible table and its underlying data structure
+aren't always the same thing.
 
-FBref's exported table structure contains formatting/header artifacts that
-are not obvious when viewing the rendered webpage.
+## 4. Filtering logic placed inside the loop
 
-**Resolution**
+The filtering message printed 551 times instead of once, because
+the filter was written inside the for loop instead of before it.
+Fixed by moving filtering to run once, before the loop.
 
-Investigated the raw dataset and identified the structural pattern before
-cleaning the data.
+## 5. classify_status() and attempt_repair() disagreed
 
-**Engineering lesson**
+For a low-confidence drift mapping, status printed RECOVER while
+the repair result separately said success: False. classify_status
+was being called before attempt_repair had run, so it made a
+decision without knowing whether repair had actually succeeded.
+Fixed by reordering the pipeline so repair always runs first, and
+its real result is passed into classify_status.
 
-Do not assume that a webpage's visual table representation is equivalent to
-its machine-readable data representation.
+A status should describe an outcome that already happened, not a
+prediction of what might happen.
 
-**Why this matters to Sentinel**
+## 6. FileNotFoundError writing the run report
 
-This became one of the motivations for building validation around the
-scraper output rather than trusting successful extraction alone.
+data/runs/ did not exist, so writing the report file failed.
+Fixed by creating the folder before running.
 
----
+A valid file path doesn't guarantee its parent folder exists.
 
-### ERR-002 — `Unnamed` columns appeared in the FBref dataset
+## 7. echo. not recognized in PowerShell
 
-**Stage:** Data ingestion / cleaning  
-**Status:** Resolved
+echo. is a Windows CMD trick, not valid PowerShell. Not needed in
+the end, since a real run already put a file in the folder.
+PowerShell's equivalent, if needed later, is New-Item.
 
-**Symptom**
+Shell syntax is environment-specific and should be checked against
+the shell actually being used.
 
-The imported CSV contained multiple columns named `Unnamed`.
+## 8. ImportError: cannot import name 'EXPECTED_FIELDS'
 
-**Expected**
+The test file tried to import a constant that was never defined.
+The project's real constant for this purpose is REQUIRED_FIELDS,
+already defined in schema.py. Fixed by importing REQUIRED_FIELDS
+from validation.schema instead.
 
-Columns should correspond to meaningful football statistics.
+Tests should use the project's one real schema definition, not a
+second name invented for convenience.
 
-**Actual**
+## 9. ImportError: cannot import name 'SCHEMA_NAME'
 
-FBref's multi-level/header structure produced unnamed columns during import.
+report.py was written to import SCHEMA_NAME and SCHEMA_VERSION
+before those constants existed in schema.py. Fixed by adding both
+constants to schema.py.
 
-**Resolution**
+## 10. Duplicate constants in schema.py
 
-Inspected the raw structure and combined the FBref headers before applying
-normal cleaning and type conversion.
-
-**Engineering lesson**
-
-Schema interpretation must happen before generic cleaning.
-
----
-
-### ERR-003 — Numeric conversion encountered incompatible values
-
-**Stage:** Data cleaning  
-**Status:** Resolved
-
-**Symptom**
-
-Some statistical columns could not immediately be treated as numeric.
-
-**Expected**
-
-Statistical fields should contain numeric values suitable for validation and
-analysis.
-
-**Actual**
-
-Raw scraped values included representations that required conversion.
-
-**Resolution**
-
-Implemented reusable numeric conversion utilities and applied them to the
-appropriate fields.
-
-**Engineering lesson**
-
-Scraped data should be treated as untrusted input even when the source is
-considered reliable.
-
----
-
-### ERR-004 — `TypeError: 'method' object is not subscriptable`
-
-**Stage:** Data analysis  
-**Status:** Resolved
-
-**Symptom**
-
-Code attempted to subscript an object that was actually a method.
-
-**Expected**
-
-The expression should return a subscriptable value.
-
-**Actual**
-
-A method reference was being treated as though its result had already been
-called.
-
-**Root cause**
-
-Incorrect method invocation.
-
-**Resolution**
-
-Inspected the expression and corrected the method call.
-
-**Engineering lesson**
-
-When working with pandas objects, distinguish carefully between a method
-itself and the value returned by calling that method.
-
----
-
-### ERR-005 — `data/runs` directory did not exist
-
-**Stage:** Run reporting  
-**Status:** Resolved
-
-**Symptom**
-
-The pipeline attempted to write a run report into `data/runs/`, but the
-directory did not exist.
-
-**Expected**
-
-The pipeline should successfully persist a run report.
-
-**Actual**
-
-File creation failed because the destination directory had not been
-created.
-
-**Resolution**
-
-Created the required directory before writing run reports.
-
-**Engineering lesson**
-
-A file path being valid does not guarantee that its parent directory exists.
-Production code should explicitly manage required output directories.
-
----
-
-### ERR-006 — PowerShell `echo.` command behaved unexpectedly
-
-**Stage:** Development environment  
-**Status:** Resolved
-
-**Symptom**
-
-A shell command used to create/format files behaved differently in
-PowerShell than expected.
-
-**Expected**
-
-The command should create the intended output.
-
-**Actual**
-
-PowerShell interpreted the command differently from the expected shell
-syntax.
-
-**Resolution**
-
-Used PowerShell-compatible commands instead.
-
-**Engineering lesson**
-
-Shell commands are environment-dependent. Reproducible project instructions
-should specify the expected shell or use cross-platform Python/file APIs.
-
----
-
-### ERR-007 — `required_fields` / `REQUIRED_FIELDS` was not defined
-
-**Stage:** Schema testing  
-**Status:** Resolved
-
-**Symptom**
-
-The controlled test attempted to use `REQUIRED_FIELDS`, but the name was not
-available in the test file.
-
-**Expected**
-
-The test should have access to the project's canonical schema definition.
-
-**Actual**
-
-The constant had not been imported.
-
-**Resolution**
-
-Imported `REQUIRED_FIELDS` from `validation.schema`.
-
-**Engineering lesson**
-
-The schema should have one source of truth. Tests should import the project's
-actual schema rather than recreate it locally.
-
----
-
-### ERR-008 — Drift test initially returned no drift
-
-**Stage:** Schema drift detection  
-**Status:** Expected test result
-
-**Expected**
-
-No drift should be detected in a valid record.
-
-**Resolution**
-
-Confirmed this was the correct control case before introducing a deliberately
-broken record.
-
-**Engineering lesson**
-
-A good failure test needs a known-good control case. Otherwise it is
-impossible to distinguish a broken validator from a correctly passing record.
-
----
-
-### ERR-009 — Deliberate `games` → `appearances` schema drift
-
-**Stage:** Schema drift detection  
-**Status:** Detected successfully
-
-**Test input**
-
-The expected field:
-
-```text
-games
-was replaced with:
-
-appearances
-
-Observed
-
-{
-    'missing': ['games'],
-    'unexpected': ['appearances'],
-    'detected': True
-}
-
-Expected
-
-Sentinel should identify both the missing expected field and the unexpected incoming field.
-
-Result
-
-PASS.
-
-Engineering lesson
-
-Sentinel can distinguish structural schema drift from ordinary record-level validation errors.
-
-### ERR-010 — Low-confidence mapping produced RECOVER
-
-Stage: Failure classification / recovery
-Status: Identified and corrected
-
-Symptom
-
-The mapping:
-
-appearances → games
-
-received a low similarity score:
-
-0.375
-
-but the original status classifier returned:
-
-Status.RECOVER
-
-Problem
-
-RECOVER implied that recovery had actually succeeded, even though only a possible mapping had been discovered.
-
-Why this was dangerous
-
-The system was reporting an intended action as a completed outcome.
-
-Resolution
-
-Changed the state-machine logic so that drift alone cannot produce RECOVER.
-
-A repair must:
-
-Pass the confidence threshold.
-
-Actually be applied.
-
-Be revalidated successfully.
-
-Otherwise the record is escalated to QUARANTINE.
-
-Engineering lesson
-
-A status must describe an observed outcome, not the system's intention.
-
-ERR-011 — attempt_repair() reported success before revalidation
-
-Stage: Recovery engine
-Status: Corrected
-
-Symptom
-
-attempt_repair() declared:
-
-success: True
-
-immediately after renaming the field.
-
-Problem
-
-A syntactically successful rename does not prove that the resulting record is valid.
-
-Resolution
-
-Repair now follows:
-
-confidence gate
-      ↓
-copy record
-      ↓
-apply mapping
-      ↓
-validate repaired record
-      ↓
-success / refusal
-
-RECOVER is only possible after successful revalidation.
-
-Engineering lesson
-
-Self-healing requires verification. A repair that has not been validated is only a proposed repair.
-
-ERR-012 — classify_status() lacked repair outcome
-
-Stage: Pipeline state machine
-Status: Corrected
-
-Symptom
-
-Status classification depended on drift detection but did not know whether the attempted repair succeeded.
-
-Problem
-
-Two independent components could disagree:
-
-drift detected → RECOVER
-repair failed  → QUARANTINE
-
-Resolution
-
-classify_status() now receives the repair result.
-
-The intended relationship is:
-
-DRIFT
-  ↓
-REPAIR
-  ↓
-REVALIDATION
-  ↓
-SUCCESS → RECOVER
-FAILURE → QUARANTINE
-
-Engineering lesson
-
-Final state should be determined from the actual pipeline outcome, not from an earlier prediction.
-
-ERR-013 — EXPECTED_FIELDS import failure
-
-Stage: Automated tests
-Status: Resolved
-
-Error
-
-ImportError: cannot import name 'EXPECTED_FIELDS'
-from 'validation.drift'
-
-Root cause
-
-The test suite attempted to import a constant that did not exist in validation.drift.
-
-The project's actual schema definition was already located in:
-
-validation.schema.REQUIRED_FIELDS
-
-Resolution
-
-Changed the import to:
-
-from validation.schema import REQUIRED_FIELDS
-from validation.drift import detect_drift, suggest_mapping
-
-And changed:
-
-detect_drift(record, EXPECTED_FIELDS)
-
-to:
-
-detect_drift(record, REQUIRED_FIELDS)
-
-Engineering lesson
-
-Do not invent parallel constants for tests. Tests should consume the same canonical contract used by the application.
+NUMERIC_FIELDS and TEXT_FIELDS were each defined twice in the
+same file, with identical values. Fixed by removing the duplicate
+pair.
+
+## 11. run_pipeline only accepted a file path
+
+server.py needed to hand the pipeline a parsed JSON payload
+directly, not a file path, but run_pipeline only knew how to open
+a file. Caught before it reached a live request. Fixed by making
+run_pipeline accept either a string path or a dict, checking the
+input type before deciding how to load the data.
+
+An API boundary and a command-line entry point don't always want
+the same input shape. The function underneath both needs to
+handle both, not assume one caller's convention.
+
+## 12. Extra fields were quarantining otherwise valid records
+
+If the source added a new field without removing anything
+required, drift detection correctly flagged it as unexpected, but
+classify_status treated any drift the same way and quarantined
+the whole record even though nothing was actually missing or
+broken. Fixed by splitting the logic: only a missing required
+field triggers repair-or-quarantine, an extra field alone produces
+WARNING instead, and the record stays in the trusted set.
+
+A validator should fail on a real problem, not on the source
+simply changing in a way that isn't a problem.
+
+## 13. check_duplicates never flagged real duplicates
+
+check_duplicates keyed on (player_name, squad) together. A player
+appearing under two different squads, the real case for a
+mid-season transfer, produced two different keys instead of one
+repeated key, so the count never exceeded 1 and nothing was ever
+flagged, even against a real dataset known to contain transfers.
+
+Fixed by grouping on player_name alone and collecting every squad
+associated with it. A name appearing more than once is now
+correctly reported, with likely_transfer distinguishing different
+squads (a transfer) from the same squad repeated (a probable
+scraping duplicate).
+
+Also fixed a related null-safety gap: record.get(field, "") only
+applies its default when the key is missing, not when the key is
+present with a None value, which could throw AttributeError on
+.strip(). Switched to record.get(field) or "" to cover both cases.
+
+Grouping the wrong fields together produces a function that runs
+without error and returns a plausible-looking empty result. An
+empty result is not the same as a correct one, and deserves the
+same suspicion as an error message would.

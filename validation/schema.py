@@ -15,7 +15,7 @@ RANGE_CHECKS = {
     "age": (15, 45),
     "games": (0, 46),
     "starts": (0, 46),
-    "minutes": (0, 4140),
+    "minutes": (0, 3420),
     "goals": (0, 60),
     "assists": (0, 40),
     }
@@ -140,24 +140,32 @@ def check_dataset(records: list[dict]) -> list[str]:
 
     return errors
 
-def check_duplicates(records: list[dict]) -> list[dict]:
-    """Return repeated player/squad combinations as an informational signal."""
-    keys = [
-        (
-            r.get("player_name", "").strip().lower(),
-            r.get("squad", "").strip().lower(),
-        )
-        for r in records
-    ]
+def check_duplicates(records: list[dict], name_field: str = "player_name",
+                      group_field: str = "squad") -> list[dict]:
+    """Return values in name_field appearing more than once, grouped by
+    group_field. In this schema that means players appearing under more
+    than one squad, usually a mid-season transfer. A group_field repeated
+    identically for the same name_field value suggests the same row was
+    scraped twice rather than a real transfer."""
+    grouped = {}
 
-    counts = Counter(keys)
+    for record in records:
+        identity = (record.get(name_field) or "").strip().lower()
+        group = (record.get(group_field) or "").strip()
 
-    return [
-        {
-            "player_name": player_name,
-            "squad": squad,
-            "count": count,
-        }
-        for (player_name, squad), count in counts.items()
-        if count > 1
-    ]
+        if not identity:
+            continue
+
+        grouped.setdefault(identity, []).append(group)
+
+    duplicates = []
+    for identity, groups in grouped.items():
+        if len(groups) > 1:
+            duplicates.append({
+                name_field: identity,
+                f"{group_field}s": groups,
+                "count": len(groups),
+                "likely_transfer": len(set(groups)) > 1,
+            })
+
+    return duplicates

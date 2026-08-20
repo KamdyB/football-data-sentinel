@@ -7,10 +7,16 @@ from urllib.request import Request, urlopen
 
 
 API_TOKEN = os.environ.get("BRIGHTDATA_API_TOKEN")
+# comp 9 is the Premier League, comp 10 is the Championship. The URL below
+# was pointed at comp 9, which is why raw scrapes were coming back with
+# Premier League squads (Arsenal, Liverpool, etc.) instead of Championship
+# ones. Confirm COLLECTOR_ID against the Bright Data dashboard before the
+# next trigger, this repo previously had two different IDs recorded
+# (c_msx0vnthdbenf0tf7 here vs j_msx1erge150nnc50o0 elsewhere).
 COLLECTOR_ID = "c_msx0vnthdbenf0tf7"
 TARGET_URL = (
-    "https://fbref.com/en/comps/9/2025-2026/stats/"
-    "2025-2026-Premier-League-Stats"
+    "https://fbref.com/en/comps/10/2025-2026/stats/"
+    "2025-2026-Championship-Stats"
 )
 
 BASE_URL = "https://api.brightdata.com"

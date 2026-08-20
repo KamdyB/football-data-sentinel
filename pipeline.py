@@ -13,8 +13,8 @@ from validation.schema import (
     check_duplicates,
     is_player_row,
     )
-from validation.drift import detect_drift, suggest_mapping
-from validation.recovery import attempt_repair
+from validation.drift import detect_drift, suggest_field_mappings
+from validation.recovery import attempt_multi_repair
 from validation.status import classify_status, Status
 from validation.report import build_run_report
 
@@ -39,21 +39,11 @@ def process_player(player: dict) -> dict:
     repair = None
 
     if drift["missing"]:
-        if (
-            len(drift["missing"]) == 1
-            and len(drift.get("unexpected", [])) == 1
-        ):
-            mapping = suggest_mapping(
-                drift["unexpected"][0],
-                drift["missing"][0],
-            )
-            repair = attempt_repair(player, mapping)
-        else:
-            repair = {
-                "success": False,
-                "reason": "ambiguous field drift",
-                "record": player.copy(),
-            }
+        mapping_result = suggest_field_mappings(
+            drift["missing"],
+            drift.get("unexpected", []),
+        )
+        repair = attempt_multi_repair(player, mapping_result)
 
     final_record = (
         repair["record"]

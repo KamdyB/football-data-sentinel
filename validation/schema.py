@@ -15,14 +15,17 @@ RANGE_CHECKS = {
     "age": (15, 45),
     "games": (0, 46),
     "starts": (0, 46),
-    "minutes": (0, 3420),
+    "minutes": (0, 4140),  # 46 games x 90 min, matches the games/starts cap above
     "goals": (0, 60),
     "assists": (0, 40),
     }
 
-EXPECTED_RECORD_RANGE = (500, 620)
+# Plausible registered squad size band, used to derive an expected total
+# record count from however many distinct squads are actually present,
+# rather than hardcoding a total that only holds for one competition.
+PLAYERS_PER_SQUAD_RANGE = (18, 35)
 SCHEMA_NAME = "championship_player_stats"
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 def validate_record(record: dict) -> list[str]:
     """Return problems found in one player record."""
@@ -110,14 +113,29 @@ def check_relationships(record: dict) -> list[str]:
 
     return errors
 
-def check_record_count(records: list[dict]) -> list[str]:
-    """Return an error if the dataset size is outside a plausible range."""
+def check_record_count(records: list[dict], squad_field: str = "squad") -> list[str]:
+    """Return an error if the dataset size is outside a range derived from
+    the number of distinct squads actually present. A competition's total
+    record count scales with how many squads it has, so this check adapts
+    to whatever competition the data came from instead of assuming one
+    fixed total."""
     errors = []
     count = len(records)
-    low, high = EXPECTED_RECORD_RANGE
+    squad_count = len({r.get(squad_field) for r in records if r.get(squad_field)})
+
+    if squad_count == 0:
+        errors.append("record count check: no squads found in records")
+        return errors
+
+    low_per_squad, high_per_squad = PLAYERS_PER_SQUAD_RANGE
+    low = squad_count * low_per_squad
+    high = squad_count * high_per_squad
 
     if not (low <= count <= high):
-        errors.append(f"record count {count} outside expected range {low}-{high}")
+        errors.append(
+            f"record count {count} outside expected range {low}-{high} "
+            f"for {squad_count} squads"
+            )
 
     return errors
 

@@ -4,8 +4,8 @@ from validation.schema import (
     check_relationships, check_dataset,
     )
 from validation.schema import REQUIRED_FIELDS
-from validation.drift import detect_drift, suggest_mapping
-from validation.recovery import attempt_repair
+from validation.drift import detect_drift, suggest_mapping, suggest_field_mappings
+from validation.recovery import attempt_repair, attempt_multi_repair
 from validation.status import classify_status, Status
 
 
@@ -57,9 +57,9 @@ def test_record_count_drop():
 
 def test_low_confidence_repair_refuses():
     record = GOOD_RECORD.copy()
-    record["appearances"] = record.pop("games")
+    record["gp"] = record.pop("games")  # short, unrelated-looking name, not a known alias
     drift = detect_drift(record, REQUIRED_FIELDS)
-    mapping = suggest_mapping("appearances", "games")
+    mapping = suggest_mapping("gp", "games")
     repair = attempt_repair(record, mapping)
     status = classify_status([], drift, repair)
 
@@ -81,6 +81,26 @@ def test_high_confidence_repair_succeeds():
     print("test_high_confidence_repair_succeeds: PASS")
 
 
+def test_semantically_distinct_field_never_auto_maps():
+    # xG and xAG are expected-value metrics, not renamed goals/assists.
+    # Even at whatever fuzzy score they'd score, this pair must be
+    # rejected outright, not just below-threshold.
+    record = GOOD_RECORD.copy()
+    del record["goals"]
+    del record["assists"]
+    record["xG"] = "0.4"
+    record["xAG"] = "0.2"
+
+    drift = detect_drift(record, REQUIRED_FIELDS)
+    mapping_result = suggest_field_mappings(drift["missing"], drift["unexpected"])
+    repair = attempt_multi_repair(record, mapping_result)
+
+    blocked_methods = {c["method"] for c in mapping_result["candidates"]}
+    assert "blocked_non_equivalent" in blocked_methods
+    assert repair["success"] is False
+    print("test_semantically_distinct_field_never_auto_maps: PASS")
+
+
 if __name__ == "__main__":
     test_missing_field()
     test_wrong_type()
@@ -89,4 +109,5 @@ if __name__ == "__main__":
     test_record_count_drop()
     test_low_confidence_repair_refuses()
     test_high_confidence_repair_succeeds()
+    test_semantically_distinct_field_never_auto_maps()
     print("\nAll failure-taxonomy tests passed.")

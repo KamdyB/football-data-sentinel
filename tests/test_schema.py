@@ -3,7 +3,7 @@ from validation.schema import (
     validate_record, check_text_fields, 
     check_numeric_fields, check_ranges,
     is_player_row, check_relationships,
-    check_dataset, REQUIRED_FIELDS,
+    check_dataset, check_duplicates, REQUIRED_FIELDS,
     )
 
 from validation.drift import (
@@ -74,8 +74,8 @@ print(status)
 
 players = [p for p in players if is_player_row(p)]
 print(f"{len(players)} valid player rows after filtering.")
-    
-total_errors = 0
+
+all_errors = []
 for i, player in enumerate(players):
     if not is_player_row(player):
         continue
@@ -86,15 +86,15 @@ for i, player in enumerate(players):
     errors += check_relationships(player)
 
     if errors:
-        total_errors += len(errors)
+        all_errors.extend(errors)
         print(f"Record {i}: {errors}")
 
 dataset_errors = check_dataset(players)
 
-if total_errors == 0:
+if not all_errors:
     print("Schema validation passed.")
 else:
-    print(f"Found {total_errors} schema errors.")
+    print(f"Found {len(all_errors)} schema errors.")
 
 if dataset_errors:
     print(f"Dataset-level issues: {dataset_errors}")
@@ -102,16 +102,19 @@ else:
     print("Dataset-level checks passed.")
 
 
-import json
 from datetime import datetime, timezone
 
 report = build_run_report(
     raw_count=len(data[0]["players"]),
-    valid_count=len(players),
-    validation_errors=errors,
+    player_row_count=len(players),
+    final_trusted_count=len(players) - len(all_errors),
+    recovered_count=1 if repair["success"] else 0,
+    quarantined_count=len(all_errors),
+    validation_errors=all_errors + dataset_errors,
     drift_result=drift,
     repair_result=repair,
     status=status,
+    duplicates=check_duplicates(players),
     )
 
 timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 import sys
 
@@ -18,6 +20,9 @@ from validation.recovery import attempt_multi_repair
 from validation.status import classify_status, Status
 from validation.report import build_run_report
 
+AI_HEALING_ENABLED = bool(os.environ.get("GEMINI_API_KEY"))
+AI_CALLS_PER_MINUTE = 5  # Gemini free tier ceiling
+
 
 def validate_player(player: dict) -> list[str]:
     """Run all record-level validation checks."""
@@ -30,7 +35,74 @@ def validate_player(player: dict) -> list[str]:
         )
 
 
-def process_player(player: dict) -> dict:
+def _drift_signature(drift: dict) -> tuple:
+    return (tuple(sorted(drift["missing"])), tuple(sorted(drift.get("unexpected", []))))
+
+
+def _precompute_ai_mappings(players: list[dict]) -> dict:
+    """One AI call per distinct drift signature in the dataset, not one per
+    record. Schema drift is structural: every record sharing the same
+    missing/unexpected fields has the same underlying cause, so the same
+    question doesn't need asking hundreds of times. Also keeps the run
+    under the Gemini free tier's requests-per-minute ceiling."""
+    if not AI_HEALING_ENABLED:
+        return {}
+
+    from validation.ai_healer import suggest_ai_mapping
+
+    signatures = {}
+    for player in players:
+        drift = detect_drift(player, REQUIRED_FIELDS)
+        if not drift["missing"]:
+            continue
+        sig = _drift_signature(drift)
+        signatures.setdefault(sig, (drift, player))
+
+    cache = {}
+    calls_made = 0
+
+    for sig, (drift, sample_player) in signatures.items():
+        mapping_result = suggest_field_mappings(drift["missing"], drift.get("unexpected", []))
+        resolved = {m["missing_field"] for m in mapping_result["accepted"]}
+        unresolved = [f for f in drift["missing"] if f not in resolved]
+
+        ai_mappings = []
+        for missing_field in unresolved:
+            safe_candidates = [
+                c["unexpected_field"] for c in mapping_result["candidates"]
+                if c["missing_field"] == missing_field
+                and c["method"] != "blocked_non_equivalent"
+                ]
+            if not safe_candidates:
+                continue
+
+            if calls_made > 0 and calls_made % AI_CALLS_PER_MINUTE == 0:
+                time.sleep(65)
+
+            suggestion = suggest_ai_mapping(missing_field, safe_candidates, sample_player)
+            calls_made += 1
+            if suggestion:
+                ai_mappings.append(suggestion)
+
+        cache[sig] = ai_mappings
+
+    return cache
+
+
+def _attempt_ai_repair(player: dict, drift: dict, mapping_result: dict, ai_cache: dict) -> dict:
+    ai_mappings = ai_cache.get(_drift_signature(drift), [])
+
+    if not ai_mappings:
+        return attempt_multi_repair(player, mapping_result)
+
+    combined = {
+        "accepted": mapping_result["accepted"] + ai_mappings,
+        "candidates": mapping_result["candidates"] + ai_mappings,
+        }
+    return attempt_multi_repair(player, combined)
+
+
+def process_player(player: dict, ai_cache: dict | None = None) -> dict:
     """Run one record through validation, drift detection, and repair."""
     errors = validate_player(player)
 
@@ -44,6 +116,9 @@ def process_player(player: dict) -> dict:
             drift.get("unexpected", []),
         )
         repair = attempt_multi_repair(player, mapping_result)
+
+        if not repair["success"] and AI_HEALING_ENABLED:
+            repair = _attempt_ai_repair(player, drift, mapping_result, ai_cache or {})
 
     final_record = (
         repair["record"]
@@ -97,7 +172,8 @@ def run_pipeline(input_source) -> dict:
     players = [p for p in raw_players if is_player_row(p)]
     duplicates = check_duplicates(players)
 
-    results = [process_player(p) for p in players]
+    ai_cache = _precompute_ai_mappings(players)
+    results = [process_player(p, ai_cache) for p in players]
 
     trusted = [r["record"] for r in results if r["status"] in (Status.PASS, Status.RECOVER, Status.WARNING,)]
     quarantined = [

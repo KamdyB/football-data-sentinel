@@ -88,9 +88,30 @@ def save_raw(data: dict) -> Path:
     return path
 
 
+MIN_PLAUSIBLE_ROWS = 400  # below this, treat the collection as anomalous, not just small
+MAX_REFRESH_ATTEMPTS = 2
+
+
+def row_count(data: dict) -> int:
+    players = data.get("players", data) if isinstance(data, dict) else data
+    return len(players) if isinstance(players, list) else 0
+
+
 def refresh() -> Path:
-    collection_id = trigger_collection()
-    data = retrieve_collection(collection_id)
+    for attempt in range(1, MAX_REFRESH_ATTEMPTS + 1):
+        collection_id = trigger_collection()
+        data = retrieve_collection(collection_id)
+        count = row_count(data)
+
+        if count >= MIN_PLAUSIBLE_ROWS:
+            return save_raw(data)
+
+        print(f"attempt {attempt}: collection returned {count} rows, retrying")
+        time.sleep(POLL_INTERVAL)
+
+    # Every attempt came back anomalous. Save it anyway so Sentinel's
+    # dataset-level checks can catch it and produce a real audit record,
+    # rather than the collector's failure disappearing silently.
     return save_raw(data)
 
 

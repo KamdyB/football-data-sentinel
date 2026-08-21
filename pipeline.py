@@ -1,6 +1,5 @@
 import json
 import os
-import time
 from pathlib import Path
 import sys
 
@@ -21,7 +20,6 @@ from validation.status import classify_status, Status
 from validation.report import build_run_report
 
 AI_HEALING_ENABLED = bool(os.environ.get("GEMINI_API_KEY"))
-AI_CALLS_PER_MINUTE = 5  # Gemini free tier ceiling
 
 
 def validate_player(player: dict) -> list[str]:
@@ -40,51 +38,102 @@ def _drift_signature(drift: dict) -> tuple:
 
 
 def _precompute_ai_mappings(players: list[dict]) -> dict:
-    """One AI call per distinct drift signature in the dataset, not one per
-    record. Schema drift is structural: every record sharing the same
-    missing/unexpected fields has the same underlying cause, so the same
-    question doesn't need asking hundreds of times. Also keeps the run
-    under the Gemini free tier's requests-per-minute ceiling."""
+    """
+    Collect every unresolved mapping across the entire dataset and resolve
+    them with at most ONE Gemini request.
+
+    Deterministic mappings are resolved locally first.
+    AI is only asked about what remains unresolved.
+    """
+
     if not AI_HEALING_ENABLED:
         return {}
 
-    from validation.ai_healer import suggest_ai_mapping
+    from validation.ai_healer import suggest_ai_mappings_batch
 
     signatures = {}
+
     for player in players:
         drift = detect_drift(player, REQUIRED_FIELDS)
+
         if not drift["missing"]:
             continue
+
         sig = _drift_signature(drift)
-        signatures.setdefault(sig, (drift, player))
+
+        signatures.setdefault(
+            sig,
+            {
+                "drift": drift,
+                "sample_player": player,
+            },
+        )
+
+    ai_requests = []
+    signature_order = []
+
+    for sig, item in signatures.items():
+        drift = item["drift"]
+        sample_player = item["sample_player"]
+
+        mapping_result = suggest_field_mappings(
+            drift["missing"],
+            drift.get("unexpected", []),
+        )
+
+        resolved = {
+            mapping["missing_field"]
+            for mapping in mapping_result["accepted"]
+        }
+
+        unresolved = [
+            field
+            for field in drift["missing"]
+            if field not in resolved
+        ]
+
+        if not unresolved:
+            continue
+
+        safe_candidates = sorted(
+            {
+                candidate["unexpected_field"]
+                for candidate in mapping_result["candidates"]
+                if (
+                    candidate["missing_field"] in unresolved
+                    and candidate["method"] != "blocked_non_equivalent"
+                )
+            }
+        )
+
+        if not safe_candidates:
+            continue
+
+        signature_order.append(sig)
+
+        ai_requests.append(
+            {
+                "missing": unresolved,
+                "candidates": safe_candidates,
+                "sample": sample_player,
+            }
+        )
+
+    if not ai_requests:
+        return {}
+
+    # ONE Gemini request for the entire run.
+    batch_results = suggest_ai_mappings_batch(ai_requests)
 
     cache = {}
-    calls_made = 0
 
-    for sig, (drift, sample_player) in signatures.items():
-        mapping_result = suggest_field_mappings(drift["missing"], drift.get("unexpected", []))
-        resolved = {m["missing_field"] for m in mapping_result["accepted"]}
-        unresolved = [f for f in drift["missing"] if f not in resolved]
+    for index, sig in enumerate(signature_order):
+        mappings = []
 
-        ai_mappings = []
-        for missing_field in unresolved:
-            safe_candidates = [
-                c["unexpected_field"] for c in mapping_result["candidates"]
-                if c["missing_field"] == missing_field
-                and c["method"] != "blocked_non_equivalent"
-                ]
-            if not safe_candidates:
-                continue
+        if index < len(batch_results):
+            mappings = batch_results[index].get("mappings", [])
 
-            if calls_made > 0 and calls_made % AI_CALLS_PER_MINUTE == 0:
-                time.sleep(65)
-
-            suggestion = suggest_ai_mapping(missing_field, safe_candidates, sample_player)
-            calls_made += 1
-            if suggestion:
-                ai_mappings.append(suggestion)
-
-        cache[sig] = ai_mappings
+        cache[sig] = mappings
 
     return cache
 

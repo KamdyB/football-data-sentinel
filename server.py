@@ -1,10 +1,12 @@
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from pipeline import run_pipeline
 
 MAX_BODY_BYTES = 5 * 1024 * 1024  # 5MB guard against a malformed or runaway payload
+LATEST_REPORT_PATH = Path("data/runs/latest.json")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,13 +36,29 @@ class IngestionEndpoint(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
     def do_GET(self):
         if self.path == "/health":
             self.send_json(200, {"service": "football-data-sentinel", "status": "ok"})
+            return
+
+        if self.path == "/api/report":
+            if not LATEST_REPORT_PATH.exists():
+                self.send_json(404, {"error": "no run report yet, run the pipeline first"})
+                return
+
+            try:
+                with open(LATEST_REPORT_PATH, encoding="utf-8") as file:
+                    report = json.load(file)
+            except (OSError, json.JSONDecodeError) as error:
+                logger.warning("failed to read latest report: %s", error)
+                self.send_json(500, {"error": "latest run report is unreadable"})
+                return
+
+            self.send_json(200, report)
             return
 
         logger.warning("404 GET %s", self.path)

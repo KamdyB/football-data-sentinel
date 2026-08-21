@@ -1,52 +1,102 @@
-import os
 import json
+import os
 
 from google import genai
 
-_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
-MODEL_NAME = "gemini-3.6-flash"
+_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def suggest_ai_mapping(missing_field: str, candidate_fields: list[str], sample_record: dict) -> dict | None:
-    """Ask an LLM whether any candidate field is the same underlying stat as
-    missing_field under a different name. candidate_fields must already have
-    blocked pairs removed by the caller, this function never sees them."""
-    if not candidate_fields:
-        return None
+def _extract_json(response) -> dict:
+    text = response.text.strip()
 
-    prompt = (
-        "A football player stats record is missing a required field and has "
-        "some unexpected fields instead. Decide whether any unexpected field "
-        f"is genuinely the same underlying statistic as {missing_field!r}, "
-        "just recorded under a different name (e.g. 'appearances' vs "
-        "'games'). Only say yes if they measure the same quantity, not a "
-        "related or derived one.\n\n"
-        f"Missing field: {missing_field}\n"
-        f"Unexpected fields: {candidate_fields}\n"
-        f"Sample record: {json.dumps(sample_record)}\n\n"
-        'Reply with strict JSON only: {"unexpected_field": "<name or null>", "confident": true or false}'
-        )
+    if text.startswith("```"):
+        text = text.replace("```json", "", 1)
+        text = text.replace("```", "", 1).strip()
 
-    response = _client.models.generate_content(model=MODEL_NAME, contents=prompt)
+    return json.loads(text)
+
+
+def suggest_ai_mappings(
+    missing_fields: list[str],
+    candidate_fields: list[str],
+    sample_record: dict,
+) -> list[dict]:
+    """
+    Compatibility wrapper for a single drift signature.
+
+    One Gemini request maximum.
+    Returns [] on any AI/network/quota failure.
+    """
+    result = suggest_ai_mappings_batch(
+        [{
+            "missing": missing_fields,
+            "candidates": candidate_fields,
+            "sample": sample_record,
+        }]
+    )
+
+    if not result:
+        return []
+
+    return result[0].get("mappings", [])
+
+
+def suggest_ai_mappings_batch(requests: list[dict]) -> list[dict]:
+    """
+    Resolve all unresolved structural mappings for an entire pipeline run
+    with ONE Gemini request.
+
+    AI failure must never fail the pipeline.
+    """
+
+    if not requests:
+        return []
+
+    prompt = {
+        "task": "Resolve safe field mappings in structured football player data.",
+        "rules": [
+            "Only map a missing field to an unexpected field when semantic meaning is equivalent.",
+            "Do not guess based only on similar spelling.",
+            "Do not map fields with different meanings.",
+            "Return no mapping when uncertain.",
+            "Return only fields explicitly present in the candidate list.",
+        ],
+        "requests": requests,
+        "output_format": {
+            "results": [
+                {
+                    "request_index": 0,
+                    "mappings": [
+                        {
+                            "missing_field": "games",
+                            "unexpected_field": "gp",
+                            "confidence": 0.99,
+                        }
+                    ],
+                }
+            ]
+        },
+    }
 
     try:
-        text = response.text.strip().strip("`")
-        if text.startswith("json"):
-            text = text[4:].strip()
-        result = json.loads(text)
-    except (json.JSONDecodeError, AttributeError, ValueError):
-        return None
+        response = _client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=json.dumps(prompt),
+        )
 
-    if not result.get("confident") or not result.get("unexpected_field"):
-        return None
+        payload = _extract_json(response)
 
-    if result["unexpected_field"] not in candidate_fields:
-        return None
+        results = payload.get("results", [])
 
-    return {
-        "unexpected_field": result["unexpected_field"],
-        "missing_field": missing_field,
-        "confidence": 0.85,
-        "method": "ai_suggested",
-        }
+        if not isinstance(results, list):
+            return []
+
+        return results
+
+    except Exception as exc:
+        print(
+            "[AI_SELF_HEALING_WARNING] "
+            f"AI batch mapping unavailable; deterministic path preserved: {exc}"
+        )
+        return []

@@ -111,3 +111,81 @@ if __name__ == "__main__":
     test_high_confidence_repair_succeeds()
     test_semantically_distinct_field_never_auto_maps()
     print("\nAll failure-taxonomy tests passed.")
+
+def test_ai_batch_network_failure_returns_empty_mapping(monkeypatch):
+    from validation import ai_healer
+
+    class FailingModels:
+        def generate_content(self, *args, **kwargs):
+            raise ConnectionError("[Errno 11001] getaddrinfo failed")
+
+    class FailingClient:
+        models = FailingModels()
+
+    monkeypatch.setattr(ai_healer, "_client", FailingClient())
+
+    result = ai_healer.suggest_ai_mappings(
+        ["games", "assists"],
+        ["gp", "ast"],
+        {
+            "player_name": "Test Player",
+            "gp": 30,
+            "ast": 3,
+        },
+    )
+
+    assert result == []
+
+def test_ai_healing_batches_multiple_signatures(monkeypatch):
+    from validation import ai_healer
+
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+
+            class Response:
+                text = """
+                [
+                    {
+                        "signature_id": 0,
+                        "missing_field": "games",
+                        "unexpected_field": "gp",
+                        "confidence": 0.95
+                    },
+                    {
+                        "signature_id": 1,
+                        "missing_field": "assists",
+                        "unexpected_field": "ast",
+                        "confidence": 0.96
+                    }
+                ]
+                """
+
+            return Response()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(ai_healer, "_client", FakeClient())
+
+    batch = [
+        {
+            "signature_id": 0,
+            "missing_fields": ["games"],
+            "candidate_fields": ["gp"],
+            "sample_record": {"gp": 20},
+        },
+        {
+            "signature_id": 1,
+            "missing_fields": ["assists"],
+            "candidate_fields": ["ast"],
+            "sample_record": {"ast": 5},
+        },
+    ]
+
+    result = ai_healer.suggest_ai_batch(batch)
+
+    assert len(calls) == 1
+    assert len(result) == 2

@@ -17,7 +17,7 @@ from validation.schema import (
 from validation.drift import detect_drift, suggest_field_mappings
 from validation.recovery import attempt_multi_repair
 from validation.status import classify_status, Status
-from validation.report import build_run_report
+
 
 AI_HEALING_ENABLED = bool(os.environ.get("GEMINI_API_KEY"))
 
@@ -265,18 +265,6 @@ def run_pipeline(input_source) -> dict:
         "unexpected": sorted({field for d in drifted for field in d["unexpected"]}),
         }
 
-    report = build_run_report(
-        raw_count=len(raw_players),
-        player_row_count=len(players),
-        final_trusted_count=len(trusted),
-        recovered_count=recovered_count,
-        quarantined_count=len(quarantined),
-        validation_errors=all_errors + [f"dataset: {e}" for e in dataset_errors],
-        drift_result=run_drift,
-         repair_result=None,
-        status=overall_status,
-        duplicates=duplicates,
-        )
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     Path("data/quarantine").mkdir(parents=True, exist_ok=True)
@@ -341,3 +329,111 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print_summary(report)
+
+# THIN ENTRY POINT ONLY
+
+from __future__ import annotations
+
+import os
+
+from application.orchestrator import (
+    SentinelOrchestrator,
+)
+
+from sources.brightdata import (
+    BrightDataSource,
+)
+
+from sources.file import (
+    FileDataSource,
+)
+
+from storage.artifacts import (
+    FileArtifactRepository,
+)
+
+from storage.runs import (
+    SQLiteRunRepository,
+)
+
+from validation.ai_healer import (
+    GeminiRecoveryAdvisor,
+)
+
+
+def build_orchestrator() -> SentinelOrchestrator:
+
+    source_kind = os.getenv(
+        "SENTINEL_SOURCE",
+        "brightdata",
+    ).lower()
+
+    source = (
+        FileDataSource(
+            os.getenv(
+                "SENTINEL_RAW_PATH",
+                "data/raw/latest.json",
+            )
+        )
+        if source_kind == "file"
+        else BrightDataSource()
+    )
+
+    advisor = None
+
+    if os.getenv(
+        "GEMINI_API_KEY"
+    ):
+
+        try:
+            advisor = (
+                GeminiRecoveryAdvisor()
+            )
+        except RuntimeError:
+            advisor = None
+
+    return SentinelOrchestrator(
+        source=source,
+        runs=SQLiteRunRepository(),
+        artifacts=FileArtifactRepository(),
+        advisor=advisor,
+        baseline_tolerance=float(
+            os.getenv(
+                "SENTINEL_BASELINE_TOLERANCE",
+                "0.10",
+            )
+        ),
+        baseline_window=int(
+            os.getenv(
+                "SENTINEL_BASELINE_WINDOW",
+                "5",
+            )
+        ),
+    )
+
+
+def run_pipeline(
+    payload: dict | None = None,
+) -> dict:
+
+    return build_orchestrator().run(
+        payload
+    )
+
+
+if __name__ == "__main__":
+
+    report = run_pipeline()
+
+    print(
+        "\n"
+        f"SENTINEL   {report['status']}\n"
+        f"RUN        {report['run_id']}\n"
+        f"SOURCE     {report['source']}\n"
+        f"RAW        {report['records']['raw']}\n"
+        f"PLAYER ROWS {report['records']['player_rows']}\n"
+        f"TRUSTED    {report['records']['final_trusted']}\n"
+        f"RECOVERED  {report['records']['recovered']}\n"
+        f"QUARANTINE {report['records']['quarantined']}\n"
+        f"FAILED     {report['records']['failed']}\n"
+    )

@@ -1,120 +1,247 @@
+from __future__ import annotations
+
 import json
 import os
 import time
+
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
-
-
-API_TOKEN = os.environ.get("BRIGHTDATA_API_TOKEN")
-# comp 9 is the Premier League, comp 10 is the Championship. The URL below
-# was pointed at comp 9, which is why raw scrapes were coming back with
-# Premier League squads (Arsenal, Liverpool, etc.) instead of Championship
-# ones. Confirm COLLECTOR_ID against the Bright Data dashboard before the
-# next trigger, this repo previously had two different IDs recorded
-# (c_msx0vnthdbenf0tf7 here vs j_msx1erge150nnc50o0 elsewhere).
-COLLECTOR_ID = "c_msx0vnthdbenf0tf7"
-TARGET_URL = (
-    "https://fbref.com/en/comps/10/2025-2026/stats/"
-    "2025-2026-Championship-Stats"
+from urllib.error import (
+    HTTPError,
+)
+from urllib.request import (
+    Request,
+    urlopen,
 )
 
-BASE_URL = "https://api.brightdata.com"
-POLL_INTERVAL = 30
-MAX_ATTEMPTS = 60
+
+API_TOKEN_ENV = (
+    "BRIGHTDATA_API_TOKEN"
+)
+
+COLLECTOR_ENV = (
+    "BRIGHTDATA_COLLECTOR_ID"
+)
+
+TARGET_ENV = (
+    "BRIGHTDATA_TARGET_URL"
+)
+
+BASE_URL = os.getenv(
+    "BRIGHTDATA_API_BASE_URL",
+    "https://api.brightdata.com",
+)
+
+POLL_INTERVAL = int(
+    os.getenv(
+        "BRIGHTDATA_POLL_INTERVAL",
+        "10",
+    )
+)
+
+MAX_ATTEMPTS = int(
+    os.getenv(
+        "BRIGHTDATA_MAX_ATTEMPTS",
+        "60",
+    )
+)
+
+RAW_PATH = Path(
+    os.getenv(
+        "SENTINEL_RAW_PATH",
+        "data/raw/latest.json",
+    )
+)
+
+
+def _required(
+    name: str,
+) -> str:
+
+    value = os.getenv(
+        name
+    )
+
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set"
+        )
+
+    return value
 
 
 def trigger_collection() -> str:
-    if not API_TOKEN:
-        raise RuntimeError("BRIGHTDATA_API_TOKEN is not set")
 
-    url = (
-        f"{BASE_URL}/dca/trigger"
-        f"?collector={COLLECTOR_ID}&queue_next=1"
+    token = _required(
+        API_TOKEN_ENV
     )
 
-    body = json.dumps([{"url": TARGET_URL}]).encode("utf-8")
+    collector_id = _required(
+        COLLECTOR_ENV
+    )
+
+    target_url = _required(
+        TARGET_ENV
+    )
 
     request = Request(
-        url,
+        (
+            f"{BASE_URL}"
+            f"/dca/trigger"
+            f"?collector={collector_id}"
+            f"&queue_next=1"
+        ),
         method="POST",
         headers={
-            "Authorization": f"Bearer {API_TOKEN}",
-            "Content-Type": "application/json",
+            "Authorization":
+                f"Bearer {token}",
+            "Content-Type":
+                "application/json",
         },
-        data=body,
+        data=json.dumps(
+            [{"url": target_url}]
+        ).encode(
+            "utf-8"
+        ),
     )
 
-    with urlopen(request) as response:
-        result = json.loads(response.read())
+    with urlopen(
+        request,
+        timeout=60,
+    ) as response:
 
-    return result["collection_id"]
-
-
-def retrieve_collection(collection_id: str) -> dict:
-    url = f"{BASE_URL}/dca/dataset?id={collection_id}"
-
-    for _ in range(MAX_ATTEMPTS):
-        request = Request(
-            url,
-            headers={"Authorization": f"Bearer {API_TOKEN}"},
+        result = json.loads(
+            response.read()
         )
 
-        try:
-            with urlopen(request) as response:
-                data = json.loads(response.read())
+    return result[
+        "collection_id"
+    ]
 
-            if data.get("status") in {"collecting", "building"}:
-                time.sleep(POLL_INTERVAL)
+
+def retrieve_collection(
+    collection_id: str,
+) -> dict:
+
+    token = _required(
+        API_TOKEN_ENV
+    )
+
+    request = Request(
+        (
+            f"{BASE_URL}"
+            f"/dca/dataset"
+            f"?id={collection_id}"
+        ),
+        headers={
+            "Authorization":
+                f"Bearer {token}"
+        },
+    )
+
+    for _ in range(
+        MAX_ATTEMPTS
+    ):
+
+        try:
+
+            with urlopen(
+                request,
+                timeout=60,
+            ) as response:
+
+                data = json.loads(
+                    response.read()
+                )
+
+            if data.get(
+                "status"
+            ) in {
+                "collecting",
+                "building",
+            }:
+
+                time.sleep(
+                    POLL_INTERVAL
+                )
+
                 continue
 
             return data
 
         except HTTPError as error:
+
             if error.code != 202:
                 raise
-            time.sleep(POLL_INTERVAL)
 
-    raise TimeoutError("Bright Data collection did not finish")
+            time.sleep(
+                POLL_INTERVAL
+            )
 
-
-def save_raw(data: dict) -> Path:
-    path = Path("data/raw/latest.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2, ensure_ascii=False)
-
-    return path
+    raise TimeoutError(
+        "Bright Data collection "
+        "did not finish"
+    )
 
 
-MIN_PLAUSIBLE_ROWS = 400  # below this, treat the collection as anomalous, not just small
-MAX_REFRESH_ATTEMPTS = 2
+def save_raw(
+    data: dict,
+) -> Path:
 
+    RAW_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-def row_count(data: dict) -> int:
-    players = data.get("players", data) if isinstance(data, dict) else data
-    return len(players) if isinstance(players, list) else 0
+    temporary = (
+        RAW_PATH.with_suffix(
+            ".tmp"
+        )
+    )
+
+    with temporary.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            data,
+            file,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+        file.flush()
+        os.fsync(
+            file.fileno()
+        )
+
+    temporary.replace(
+        RAW_PATH
+    )
+
+    return RAW_PATH
 
 
 def refresh() -> Path:
-    for attempt in range(1, MAX_REFRESH_ATTEMPTS + 1):
-        collection_id = trigger_collection()
-        data = retrieve_collection(collection_id)
-        count = row_count(data)
 
-        if count >= MIN_PLAUSIBLE_ROWS:
-            return save_raw(data)
+    collection_id = (
+        trigger_collection()
+    )
 
-        print(f"attempt {attempt}: collection returned {count} rows, retrying")
-        time.sleep(POLL_INTERVAL)
+    data = (
+        retrieve_collection(
+            collection_id
+        )
+    )
 
-    # Every attempt came back anomalous. Save it anyway so Sentinel's
-    # dataset-level checks can catch it and produce a real audit record,
-    # rather than the collector's failure disappearing silently.
-    return save_raw(data)
+    return save_raw(
+        data
+    )
 
 
 if __name__ == "__main__":
-    path = refresh()
-    print(f"Fresh Bright Data result saved to {path}")
+
+    print(
+        "Fresh Bright Data result "
+        f"saved to {refresh()}"
+    )

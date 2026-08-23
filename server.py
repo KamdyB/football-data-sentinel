@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from pipeline import run_pipeline
-from scraper.refresh import refresh as refresh_brightdata
+from scraper.refresh import refresh as refresh
 
 MAX_BODY_BYTES = 5 * 1024 * 1024  # 5MB guard against a malformed or runaway payload
 LATEST_REPORT_PATH = Path("data/runs/latest.json")
@@ -66,7 +66,18 @@ class IngestionEndpoint(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "route not found"})
 
     def do_POST(self):
+        if self.path == "/api/refresh":
+             try:
+                  raw_path = refresh()
+                  report = run_pipeline(str(raw_path))
 
+                  self.send_json(200, report)
+   
+             except Exception:
+                 logger.exception("refresh failed")
+                 self.send_json(500, {"error": "Sentinel refresh failed"})
+
+             return
         if self.path != "/api/process":
             logger.warning("404 POST %s", self.path)
             self.send_json(404, {"error": "route not found"})

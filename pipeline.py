@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 import sys
 
@@ -17,9 +18,10 @@ from validation.schema import (
 from validation.drift import detect_drift, suggest_field_mappings
 from validation.recovery import attempt_multi_repair
 from validation.status import classify_status, Status
-
+from validation.report import build_run_report
 
 AI_HEALING_ENABLED = bool(os.environ.get("GEMINI_API_KEY"))
+AI_CALLS_PER_MINUTE = 5  # Gemini free tier ceiling
 
 
 def validate_player(player: dict) -> list[str]:
@@ -38,102 +40,51 @@ def _drift_signature(drift: dict) -> tuple:
 
 
 def _precompute_ai_mappings(players: list[dict]) -> dict:
-    """
-    Collect every unresolved mapping across the entire dataset and resolve
-    them with at most ONE Gemini request.
-
-    Deterministic mappings are resolved locally first.
-    AI is only asked about what remains unresolved.
-    """
-
+    """One AI call per distinct drift signature in the dataset, not one per
+    record. Schema drift is structural: every record sharing the same
+    missing/unexpected fields has the same underlying cause, so the same
+    question doesn't need asking hundreds of times. Also keeps the run
+    under the Gemini free tier's requests-per-minute ceiling."""
     if not AI_HEALING_ENABLED:
         return {}
 
-    from validation.ai_healer import suggest_ai_mappings_batch
+    from validation.ai_healer import suggest_ai_mapping
 
     signatures = {}
-
     for player in players:
         drift = detect_drift(player, REQUIRED_FIELDS)
-
         if not drift["missing"]:
             continue
-
         sig = _drift_signature(drift)
-
-        signatures.setdefault(
-            sig,
-            {
-                "drift": drift,
-                "sample_player": player,
-            },
-        )
-
-    ai_requests = []
-    signature_order = []
-
-    for sig, item in signatures.items():
-        drift = item["drift"]
-        sample_player = item["sample_player"]
-
-        mapping_result = suggest_field_mappings(
-            drift["missing"],
-            drift.get("unexpected", []),
-        )
-
-        resolved = {
-            mapping["missing_field"]
-            for mapping in mapping_result["accepted"]
-        }
-
-        unresolved = [
-            field
-            for field in drift["missing"]
-            if field not in resolved
-        ]
-
-        if not unresolved:
-            continue
-
-        safe_candidates = sorted(
-            {
-                candidate["unexpected_field"]
-                for candidate in mapping_result["candidates"]
-                if (
-                    candidate["missing_field"] in unresolved
-                    and candidate["method"] != "blocked_non_equivalent"
-                )
-            }
-        )
-
-        if not safe_candidates:
-            continue
-
-        signature_order.append(sig)
-
-        ai_requests.append(
-            {
-                "missing": unresolved,
-                "candidates": safe_candidates,
-                "sample": sample_player,
-            }
-        )
-
-    if not ai_requests:
-        return {}
-
-    # ONE Gemini request for the entire run.
-    batch_results = suggest_ai_mappings_batch(ai_requests)
+        signatures.setdefault(sig, (drift, player))
 
     cache = {}
+    calls_made = 0
 
-    for index, sig in enumerate(signature_order):
-        mappings = []
+    for sig, (drift, sample_player) in signatures.items():
+        mapping_result = suggest_field_mappings(drift["missing"], drift.get("unexpected", []))
+        resolved = {m["missing_field"] for m in mapping_result["accepted"]}
+        unresolved = [f for f in drift["missing"] if f not in resolved]
 
-        if index < len(batch_results):
-            mappings = batch_results[index].get("mappings", [])
+        ai_mappings = []
+        for missing_field in unresolved:
+            safe_candidates = [
+                c["unexpected_field"] for c in mapping_result["candidates"]
+                if c["missing_field"] == missing_field
+                and c["method"] != "blocked_non_equivalent"
+                ]
+            if not safe_candidates:
+                continue
 
-        cache[sig] = mappings
+            if calls_made > 0 and calls_made % AI_CALLS_PER_MINUTE == 0:
+                time.sleep(65)
+
+            suggestion = suggest_ai_mapping(missing_field, safe_candidates, sample_player)
+            calls_made += 1
+            if suggestion:
+                ai_mappings.append(suggestion)
+
+        cache[sig] = ai_mappings
 
     return cache
 
@@ -265,6 +216,18 @@ def run_pipeline(input_source) -> dict:
         "unexpected": sorted({field for d in drifted for field in d["unexpected"]}),
         }
 
+    report = build_run_report(
+        raw_count=len(raw_players),
+        player_row_count=len(players),
+        final_trusted_count=len(trusted),
+        recovered_count=recovered_count,
+        quarantined_count=len(quarantined),
+        validation_errors=all_errors + [f"dataset: {e}" for e in dataset_errors],
+        drift_result=run_drift,
+         repair_result=None,
+        status=overall_status,
+        duplicates=duplicates,
+        )
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     Path("data/quarantine").mkdir(parents=True, exist_ok=True)
@@ -329,111 +292,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print_summary(report)
-
-# THIN ENTRY POINT ONLY
-
-from __future__ import annotations
-
-import os
-
-from application.orchestrator import (
-    SentinelOrchestrator,
-)
-
-from sources.brightdata import (
-    BrightDataSource,
-)
-
-from sources.file import (
-    FileDataSource,
-)
-
-from storage.artifacts import (
-    FileArtifactRepository,
-)
-
-from storage.runs import (
-    SQLiteRunRepository,
-)
-
-from validation.ai_healer import (
-    GeminiRecoveryAdvisor,
-)
-
-
-def build_orchestrator() -> SentinelOrchestrator:
-
-    source_kind = os.getenv(
-        "SENTINEL_SOURCE",
-        "brightdata",
-    ).lower()
-
-    source = (
-        FileDataSource(
-            os.getenv(
-                "SENTINEL_RAW_PATH",
-                "data/raw/latest.json",
-            )
-        )
-        if source_kind == "file"
-        else BrightDataSource()
-    )
-
-    advisor = None
-
-    if os.getenv(
-        "GEMINI_API_KEY"
-    ):
-
-        try:
-            advisor = (
-                GeminiRecoveryAdvisor()
-            )
-        except RuntimeError:
-            advisor = None
-
-    return SentinelOrchestrator(
-        source=source,
-        runs=SQLiteRunRepository(),
-        artifacts=FileArtifactRepository(),
-        advisor=advisor,
-        baseline_tolerance=float(
-            os.getenv(
-                "SENTINEL_BASELINE_TOLERANCE",
-                "0.10",
-            )
-        ),
-        baseline_window=int(
-            os.getenv(
-                "SENTINEL_BASELINE_WINDOW",
-                "5",
-            )
-        ),
-    )
-
-
-def run_pipeline(
-    payload: dict | None = None,
-) -> dict:
-
-    return build_orchestrator().run(
-        payload
-    )
-
-
-if __name__ == "__main__":
-
-    report = run_pipeline()
-
-    print(
-        "\n"
-        f"SENTINEL   {report['status']}\n"
-        f"RUN        {report['run_id']}\n"
-        f"SOURCE     {report['source']}\n"
-        f"RAW        {report['records']['raw']}\n"
-        f"PLAYER ROWS {report['records']['player_rows']}\n"
-        f"TRUSTED    {report['records']['final_trusted']}\n"
-        f"RECOVERED  {report['records']['recovered']}\n"
-        f"QUARANTINE {report['records']['quarantined']}\n"
-        f"FAILED     {report['records']['failed']}\n"
-    )

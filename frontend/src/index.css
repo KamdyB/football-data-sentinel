@@ -11,6 +11,15 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
+  --pass: #1b8a5a;
+  --pass-bg: rgba(27, 138, 90, 0.1);
+  --recover: #2563eb;
+  --recover-bg: rgba(37, 99, 235, 0.1);
+  --caution: #c8850a;
+  --caution-bg: rgba(232, 169, 58, 0.16);
+  --sent-off: #c23b3b;
+  --sent-off-bg: rgba(194, 59, 59, 0.1);
+
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
@@ -23,6 +32,42 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+
+:root[data-theme='dark'] {
+  --text: #9ca3af;
+  --text-h: #f3f4f6;
+  --bg: #16171d;
+  --border: #2e303a;
+  --code-bg: #1f2028;
+  --accent: #c084fc;
+  --accent-bg: rgba(192, 132, 252, 0.15);
+  --accent-border: rgba(192, 132, 252, 0.5);
+  --social-bg: rgba(47, 48, 58, 0.5);
+  --shadow:
+    rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  --pass-bg: rgba(27, 138, 90, 0.18);
+  --recover-bg: rgba(37, 99, 235, 0.18);
+  --caution-bg: rgba(232, 169, 58, 0.22);
+  --sent-off-bg: rgba(194, 59, 59, 0.18);
+}
+
+:root[data-theme='light'] {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow:
+    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --pass-bg: rgba(27, 138, 90, 0.1);
+  --recover-bg: rgba(37, 99, 235, 0.1);
+  --caution-bg: rgba(232, 169, 58, 0.16);
+  --sent-off-bg: rgba(194, 59, 59, 0.1);
+}
   -moz-osx-font-smoothing: grayscale;
 
   @media (max-width: 1024px) {
@@ -43,6 +88,10 @@
     --social-bg: rgba(47, 48, 58, 0.5);
     --shadow:
       rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+    --pass-bg: rgba(27, 138, 90, 0.18);
+    --recover-bg: rgba(37, 99, 235, 0.18);
+    --caution-bg: rgba(232, 169, 58, 0.22);
+    --sent-off-bg: rgba(194, 59, 59, 0.18);
   }
 
   #social .button-icon {

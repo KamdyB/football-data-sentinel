@@ -15,3 +15,17 @@ export async function processBatch(payload) {
 
     return data;
 }
+
+export async function refreshSentinel() {
+  const response = await fetch("/api/refresh", {
+    method: "POST",
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "Sentinel refresh failed");
+  }
+
+  return data;
+}

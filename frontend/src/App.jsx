@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import './App.css';
+import { refreshSentinel } from "./api";
+
 
 const REPORT_URL = '/api/report';
 
@@ -69,6 +71,24 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setRefreshError("");
+    setError(null);
+
+    try {
+      const data = await refreshSentinel();
+      setReport(data);
+    } catch (error) {
+      setRefreshError(error.message || "Sentinel refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const fetchReport = useCallback(() => {
     setLoading(true);
@@ -121,6 +141,12 @@ export default function App() {
           <button type="button" onClick={fetchReport}>Retry</button>
         </div>
         )}
+      
+      {refreshError && (
+        <div className="state-line state-line--error">
+          <p>Refresh failed: {refreshError}</p>
+        </div>
+        )}
 
       {!loading && !error && report && (
         <>
@@ -132,8 +158,8 @@ export default function App() {
               </div>
               <div className="status-label">{meta.label}</div>
             </div>
-            <button type="button" className="refresh-button" onClick={fetchReport}>
-              Refresh
+            <button type="button" className="refresh-button" onClick={handleRefresh} disabled={refreshing}>
+              {refreshing ? 'Refreshing Sentinel…' : 'Refresh Sentinel ↗'}
             </button>
           </section>
 

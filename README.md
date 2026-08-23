@@ -235,3 +235,40 @@ To trigger a fresh scrape via Bright Data:
 and to run the HTTP ingestion endpoint the frontend talks to:
 
     python server.py
+
+## API
+
+`server.py` exposes three routes:
+
+`GET /health` confirms the server is running.
+
+`GET /api/report` returns whatever's currently saved in
+`data/runs/latest.json`, the report from the most recent pipeline run.
+This is what the dashboard reads on load and on manual refresh.
+
+`POST /api/process` accepts a raw scraper payload directly in the
+request body and runs it through the full pipeline synchronously,
+returning the resulting report.
+
+`POST /api/refresh` triggers a live Bright Data collection via
+`scraper/refresh.py`, then runs the result through the pipeline and
+returns the report. This is a real, working, network-bound endpoint,
+a full collection can take anywhere from tens of seconds to several
+minutes depending on Bright Data's queue, so a client calling it
+should show a loading state rather than assume a fast response.
+
+## AI Disclosure
+
+AI assistance (Claude) was used throughout this project's development,
+for debugging, architectural review, writing and fixing tests, and
+implementing the AI-assisted recovery fallback described above. Every
+change was run and verified against real data and the real test suite
+before being adopted, not accepted on faith, several proposed changes
+from AI assistance were rejected or corrected after verification
+surfaced real problems with them (documented in `ERRORS.md`). The
+author understands the full architecture and can explain any part of
+it: why validation, drift detection, and recovery are separate
+concerns, why the AI fallback is bounded by a hard-coded blocklist it
+cannot override, and why several specific bugs (wrong competition ID,
+a stale range check, a hardcoded record-count assumption) existed and
+how each was found and fixed.

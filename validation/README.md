@@ -35,6 +35,17 @@ schema.py again. Only if it comes out clean is the repair called
 a success. If confidence is too low, or the repair still fails
 validation, it refuses and says why.
 
+**ai_healer.py**
+A fallback for the cases drift.py's deterministic matching can't
+resolve, a field renamed to something with no lexical resemblance
+to the original (`gp` instead of `games`). Only called once per
+distinct drift pattern across a whole dataset, not once per
+record, and only ever offered fields that haven't already been
+hard-blocked by drift.py's blocklist, so it can propose a genuinely
+uncertain mapping but can never override a known-unsafe one. Any
+network failure degrades to no suggestion rather than crashing the
+run. Off entirely unless `GEMINI_API_KEY` is set.
+
 **status.py**
 Turns everything above into one final label:
 
@@ -61,25 +72,31 @@ everything downstream (a CLI summary, an API response, a future
 frontend) is meant to read, instead of reaching into the
 validation logic directly.
 
-## Why these are five separate files instead of one
+## Why these are six separate files instead of one
 
 Each file answers a different question, and mixing them would
 blur responsibilities that need to stay separate for the
 project's core argument to hold up:
 
 - schema.py asks: is this record internally correct?
-- drift.py asks: has the source changed shape?
-- recovery.py asks: can I safely fix this, and did the fix
-  actually work?
+- drift.py asks: has the source changed shape, and is a proposed
+  fix even safe to consider?
+- recovery.py asks: can I safely apply this fix, and did it
+  actually work once applied?
+- ai_healer.py asks: for the fields nothing above could resolve,
+  is there a plausible answer worth proposing, without ever being
+  allowed to bypass drift.py's safety boundary?
 - status.py asks: given everything above, what's the final
   verdict?
 - report.py asks: how do I describe this run to something outside
   the validation layer?
 
 recovery.py depends on schema.py, since it needs the same checks
-to verify a repair. report.py depends on status.py and schema.py,
-since it needs the status labels and the schema version. Nothing
-goes the other direction. schema.py doesn't know recovery.py
+to verify a repair. ai_healer.py is only ever called by pipeline.py
+after recovery.py has already failed, and only receives candidates
+drift.py has already filtered. report.py depends on status.py and
+schema.py, since it needs the status labels and the schema version.
+Nothing goes the other direction. schema.py doesn't know recovery.py
 exists, and status.py doesn't know report.py exists. That one-way
 dependency is deliberate: the lower-level checks stay independent
 of the orchestration built on top of them.
@@ -110,12 +127,17 @@ produces WARNING instead.
 
 Everything specific to EFL Championship player stats lives in
 schema.py as constants: REQUIRED_FIELDS, NUMERIC_FIELDS,
-TEXT_FIELDS, RANGE_CHECKS, EXPECTED_RECORD_RANGE, SCHEMA_NAME, and
+TEXT_FIELDS, RANGE_CHECKS, PLAYERS_PER_SQUAD_RANGE, SCHEMA_NAME, and
 SCHEMA_VERSION. To point this pipeline at a different source, a
 different soccerdata endpoint, a StatsBomb export, a different
-competition entirely, only that file needs new values. drift.py's
-FIELD_ALIASES also needs its own entries for whatever field-naming
-quirks the new source has.
+competition entirely, only that file needs new values.
+PLAYERS_PER_SQUAD_RANGE in particular is deliberately not a fixed
+total record count, it's a plausible-squad-size band multiplied by
+however many distinct squads are actually present in the data, so
+moving to a competition with a different number of clubs doesn't
+require editing a magic number by hand. drift.py's FIELD_ALIASES
+also needs its own entries for whatever field-naming quirks the new
+source has.
 
 recovery.py, status.py, report.py, and pipeline.py don't contain
 any football-specific knowledge. They operate on whatever
